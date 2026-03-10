@@ -435,7 +435,12 @@
         document.getElementById('proj-name').textContent = proj ? proj.name : '—';
         document.getElementById('obj-name').textContent = obj.name;
 
-        const left = state.timerLeft ?? obj.estimatedSecs;
+        // Calculate time left from endTime if running, otherwise use stored timerLeft
+        let left = state.timerLeft ?? obj.estimatedSecs;
+        if (state.timerRunning && state.timerEndTime) {
+          left = Math.max(0, Math.round((state.timerEndTime - Date.now()) / 1000));
+        }
+
         const total = state.timerTotal ?? obj.estimatedSecs;
         document.getElementById('countdown').textContent = fmtCountdown(left);
 
@@ -478,6 +483,10 @@
         if (obj) { state.timerLeft = obj.estimatedSecs; state.timerTotal = obj.estimatedSecs; }
       }
       saveState(state);
+
+      // Tell background to start
+      chrome.runtime.sendMessage({ type: 'START_TIMER', timerLeft: state.timerLeft });
+
       startLocalTick();
       render();
     }
@@ -485,19 +494,25 @@
     function startLocalTick() {
       clearInterval(tickInterval);
       tickInterval = setInterval(async () => {
-        if (!state.timerRunning) { clearInterval(tickInterval); return; }
+        // Refresh state from storage to stay in sync with background
+        state = await loadState();
+
+        if (!state.timerRunning) {
+          clearInterval(tickInterval);
+          render();
+          return;
+        }
+
         if (state.timerLeft <= 0) {
           state.timerRunning = false;
           state.timerLeft = 0;
           clearInterval(tickInterval);
-          await saveState(state);
           render();
           playChime('alert');
           toast('⏰ Time is up!');
           return;
         }
-        state.timerLeft--;
-        await saveState(state);
+
         render();
       }, 1000);
     }
@@ -506,6 +521,7 @@
       state.timerRunning = false;
       clearInterval(tickInterval);
       saveState(state);
+      chrome.runtime.sendMessage({ type: 'STOP_TIMER' });
       render();
     }
 
@@ -515,18 +531,29 @@
       const obj = (state.objectives || []).find(o => o.id === state.activeObjId);
       if (obj) { state.timerLeft = obj.estimatedSecs; state.timerTotal = obj.estimatedSecs; }
       saveState(state);
+      chrome.runtime.sendMessage({ type: 'RESET_TIMER' });
       render();
     }
 
     async function completeObjective() {
       const obj = (state.objectives || []).find(o => o.id === state.activeObjId);
       if (!obj) return;
-      const actualSecs = (state.timerTotal || obj.estimatedSecs) - (state.timerLeft || 0);
+
+      // Calculate actual seconds spent
+      let left = state.timerLeft || 0;
+      if (state.timerRunning && state.timerEndTime) {
+        left = Math.max(0, Math.round((state.timerEndTime - Date.now()) / 1000));
+      }
+
+      const actualSecs = (state.timerTotal || obj.estimatedSecs) - left;
       if (actualSecs < 5) { toast('Start the timer first'); return; }
 
       clearInterval(tickInterval);
       state.timerRunning = false;
+      state.timerEndTime = null;
       obj.completed = true;
+
+      chrome.runtime.sendMessage({ type: 'STOP_TIMER' });
 
       if (!state.sessions) state.sessions = [];
       state.sessions.push({

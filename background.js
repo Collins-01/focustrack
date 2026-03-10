@@ -1,52 +1,71 @@
 // FocusTrack background service worker
-// Keeps timer state alive even when popup is closed
-
-let timerInterval = null;
+const STORE_KEY = 'focustrack_v1';
+const ALARM_NAME = 'focusTimer';
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'START_TIMER') {
     startBackgroundTimer(msg.timerLeft);
     sendResponse({ ok: true });
   }
-  if (msg.type === 'STOP_TIMER') {
+  if (msg.type === 'STOP_TIMER' || msg.type === 'RESET_TIMER') {
     stopBackgroundTimer();
     sendResponse({ ok: true });
-  }
-  if (msg.type === 'GET_STATE') {
-    chrome.storage.local.get(['focustrack_v1'], (res) => {
-      sendResponse({ data: res.focustrack_v1 || null });
-    });
-    return true; // async
   }
   return true;
 });
 
-function startBackgroundTimer(initialLeft) {
-  stopBackgroundTimer();
-  let timerLeft = initialLeft;
+async function startBackgroundTimer(timerLeft) {
+  // Clear any existing alarm
+  await chrome.alarms.clear(ALARM_NAME);
 
-  timerInterval = setInterval(async () => {
-    if (timerLeft <= 0) {
-      stopBackgroundTimer();
-      // Notify if possible
-      return;
-    }
-    timerLeft--;
+  if (timerLeft <= 0) return;
 
-    // Update storage with new timerLeft
-    const res = await chrome.storage.local.get(['focustrack_v1']);
-    const state = res.focustrack_v1 ? JSON.parse(res.focustrack_v1) : null;
-    if (state) {
-      state.timerLeft = timerLeft;
-      state.timerRunning = timerLeft > 0;
-      await chrome.storage.local.set({ focustrack_v1: JSON.stringify(state) });
-    }
-  }, 1000);
+  // Calculate when the timer should end
+  const endTime = Date.now() + (timerLeft * 1000);
+
+  // Store the endTime so other parts of the app can calculate remaining time
+  const res = await chrome.storage.local.get([STORE_KEY]);
+  const state = res[STORE_KEY] ? JSON.parse(res[STORE_KEY]) : {};
+  state.timerEndTime = endTime;
+  state.timerRunning = true;
+  await chrome.storage.local.set({ [STORE_KEY]: JSON.stringify(state) });
+
+  // Create an alarm to fire when time is up
+  // Alarms are reliable even if the service worker goes to sleep
+  chrome.alarms.create(ALARM_NAME, { when: endTime });
 }
 
-function stopBackgroundTimer() {
-  if (timerInterval) {
-    clearInterval(timerInterval);
-    timerInterval = null;
+async function stopBackgroundTimer() {
+  await chrome.alarms.clear(ALARM_NAME);
+
+  const res = await chrome.storage.local.get([STORE_KEY]);
+  const state = res[STORE_KEY] ? JSON.parse(res[STORE_KEY]) : {};
+  state.timerRunning = false;
+  state.timerEndTime = null;
+  await chrome.storage.local.set({ [STORE_KEY]: JSON.stringify(state) });
+}
+
+// Listen for the alarm
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === ALARM_NAME) {
+    showNotification();
+
+    // Update state
+    const res = await chrome.storage.local.get([STORE_KEY]);
+    const state = res[STORE_KEY] ? JSON.parse(res[STORE_KEY]) : {};
+    state.timerRunning = false;
+    state.timerLeft = 0;
+    state.timerEndTime = null;
+    await chrome.storage.local.set({ [STORE_KEY]: JSON.stringify(state) });
   }
+});
+
+function showNotification() {
+  chrome.notifications.create({
+    type: 'basic',
+    iconUrl: 'icons/icon128.png',
+    title: 'FocusTrack',
+    message: 'Time is up! Your focus session has ended.',
+    priority: 2
+  });
 }
