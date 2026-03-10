@@ -120,6 +120,65 @@
       line-height: 1.6;
     }
 
+    @keyframes pulse-ring {
+      0% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(232, 255, 110, 0.4);
+      }
+
+      70% {
+        transform: scale(1.02);
+        box-shadow: 0 0 0 15px rgba(232, 255, 110, 0);
+      }
+
+      100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(232, 255, 110, 0);
+      }
+    }
+
+    .active-state.ringing {
+      animation: pulse-ring 2s infinite;
+      position: relative;
+    }
+
+    .active-state.ringing .countdown {
+      color: var(--accent);
+      opacity: 0.1;
+      filter: blur(3px);
+    }
+
+    .active-state.ringing .meta,
+    .active-state.ringing .progress,
+    .active-state.ringing .timer-controls {
+      opacity: 0.1;
+      filter: blur(2px);
+    }
+
+    .stop-chime-btn {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: var(--accent);
+      color: var(--bg);
+      border: none;
+      padding: 12px 24px;
+      border-radius: 100px;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      cursor: pointer;
+      display: none;
+      z-index: 100;
+      box-shadow: 0 8px 25px rgba(232, 255, 110, 0.25);
+    }
+
+    .active-state.ringing .stop-chime-btn {
+      display: block;
+    }
+
     /* ── ACTIVE STATE ── */
     .active-state {
       display: none;
@@ -360,6 +419,7 @@
 
   <!-- ACTIVE (objective running) -->
   <div class="active-state" id="active-state">
+    <button class="stop-chime-btn" onclick="stopAlarm()">Silence Alarm</button>
     <div class="meta">
       <div class="project-tag">
         <div class="project-dot" id="proj-dot"></div>
@@ -415,8 +475,8 @@
     async function init() {
       state = await loadState();
       render();
-      // If timer was running, resume local tick
-      if (state.timerRunning && state.timerLeft > 0) {
+      // If timer was running OR it's ringing, start local tick to keep UI in sync
+      if ((state.timerRunning && state.timerLeft > 0) || state.isAlarmRinging) {
         startLocalTick();
       }
     }
@@ -455,6 +515,8 @@
         const playBtn = document.getElementById('btn-play');
         playBtn.textContent = state.timerRunning ? '⏸' : '▶';
         playBtn.classList.toggle('running', !!state.timerRunning);
+
+        checkAlarmRinging();
       }
 
       // Footer stats
@@ -477,6 +539,7 @@
     }
 
     function startTimer() {
+      if (state.isAlarmRinging) stopAlarm();
       state.timerRunning = true;
       if (!state.timerLeft || state.timerLeft <= 0) {
         const obj = (state.objectives || []).find(o => o.id === state.activeObjId);
@@ -497,19 +560,9 @@
         // Refresh state from storage to stay in sync with background
         state = await loadState();
 
-        if (!state.timerRunning) {
+        if (!state.timerRunning && !state.isAlarmRinging) {
           clearInterval(tickInterval);
           render();
-          return;
-        }
-
-        if (state.timerLeft <= 0) {
-          state.timerRunning = false;
-          state.timerLeft = 0;
-          clearInterval(tickInterval);
-          render();
-          playChime('alert');
-          toast('⏰ Time is up!');
           return;
         }
 
@@ -519,6 +572,7 @@
 
     function pauseTimer() {
       state.timerRunning = false;
+      if (state.isAlarmRinging) stopAlarm();
       clearInterval(tickInterval);
       saveState(state);
       chrome.runtime.sendMessage({ type: 'STOP_TIMER' });
@@ -527,6 +581,7 @@
 
     function resetTimer() {
       state.timerRunning = false;
+      if (state.isAlarmRinging) stopAlarm();
       clearInterval(tickInterval);
       const obj = (state.objectives || []).find(o => o.id === state.activeObjId);
       if (obj) { state.timerLeft = obj.estimatedSecs; state.timerTotal = obj.estimatedSecs; }
@@ -551,6 +606,7 @@
       clearInterval(tickInterval);
       state.timerRunning = false;
       state.timerEndTime = null;
+      if (state.isAlarmRinging) stopAlarm();
       obj.completed = true;
 
       chrome.runtime.sendMessage({ type: 'STOP_TIMER' });
@@ -573,6 +629,31 @@
       render();
       playChime('done');
       toast('✓ Session logged!');
+    }
+
+    async function stopAlarm() {
+      state.isAlarmRinging = false;
+      chrome.runtime.sendMessage({ type: 'STOP_ALARM' });
+      await saveState(state);
+      render();
+    }
+
+    let chimeInterval = null;
+    function checkAlarmRinging() {
+      const face = document.getElementById('active-state');
+      if (state.isAlarmRinging) {
+        face.classList.add('ringing');
+        if (!chimeInterval) {
+          playChime('alert');
+          chimeInterval = setInterval(() => playChime('alert'), 3000);
+        }
+      } else {
+        face.classList.remove('ringing');
+        if (chimeInterval) {
+          clearInterval(chimeInterval);
+          chimeInterval = null;
+        }
+      }
     }
 
     // ── OPEN FULL APP ──

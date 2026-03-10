@@ -219,6 +219,69 @@
     }
 
     /* Big clock face */
+    @keyframes pulse-ring {
+      0% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(232, 255, 110, 0.4);
+      }
+
+      70% {
+        transform: scale(1.02);
+        box-shadow: 0 0 0 20px rgba(232, 255, 110, 0);
+      }
+
+      100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(232, 255, 110, 0);
+      }
+    }
+
+    .clock-face.ringing {
+      animation: pulse-ring 2s infinite;
+      border-color: var(--accent);
+    }
+
+    .clock-face.ringing .clock-display {
+      color: var(--accent);
+    }
+
+    .stop-chime-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(12, 12, 14, 0.85);
+      backdrop-filter: blur(8px);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      border-radius: 28px;
+      z-index: 50;
+    }
+
+    .clock-face.ringing .stop-chime-overlay {
+      display: flex;
+    }
+
+    .btn-stop-chime {
+      background: var(--accent);
+      color: var(--bg);
+      border: none;
+      padding: 16px 32px;
+      border-radius: 100px;
+      font-size: 14px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      cursor: pointer;
+      box-shadow: 0 10px 30px rgba(232, 255, 110, 0.2);
+      transition: transform 0.2s;
+    }
+
+    .btn-stop-chime:hover {
+      transform: scale(1.05);
+      background: #fff;
+    }
+
     .clock-face {
       width: 100%;
       max-width: 560px;
@@ -1327,7 +1390,12 @@
           <div style="font-size:12px; color:var(--text3); font-family:'DM Mono',monospace;" id="today-date"></div>
         </div>
 
-        <div class="clock-face">
+        <div class="clock-face" id="clock-face">
+          <div class="stop-chime-overlay">
+            <div style="font-size:48px; margin-bottom:16px;">⏰</div>
+            <div style="font-size:18px; font-weight:700; margin-bottom:24px;">Time is up!</div>
+            <button class="btn-stop-chime" onclick="stopAlarm()">Silence Alarm</button>
+          </div>
           <div class="clock-objective">Objective: <span id="clock-obj-label">—</span></div>
           <div class="clock-display" id="clock-display">00:00:00</div>
           <div class="clock-progress">
@@ -1566,6 +1634,7 @@
       timerRunning: false,
       timerTotal: 0,     // total seconds for this objective
       timerLeft: 0,      // seconds remaining
+      isAlarmRinging: false,
       editingProjectId: null,
       selectedColor: COLORS[0],
     };
@@ -1582,6 +1651,7 @@
         timerLeft: state.timerLeft,
         timerTotal: state.timerTotal,
         timerRunning: state.timerRunning,
+        isAlarmRinging: state.isAlarmRinging,
       });
       if (inExtension) {
         chrome.storage.local.set({ focustrack_v1: data });
@@ -1598,6 +1668,16 @@
           renderObjectives();
           updateClockDisplay();
           updateClockMeta();
+          checkAlarmRinging();
+        });
+        chrome.storage.onChanged.addListener((changes, area) => {
+          if (area === 'local' && changes.focustrack_v1) {
+            applyLoaded(changes.focustrack_v1.newValue);
+            updateClockDisplay();
+            updateClockMeta();
+            renderObjectives();
+            checkAlarmRinging();
+          }
         });
       } else {
         applyLoaded(localStorage.getItem('focustrack_v1'));
@@ -1605,8 +1685,9 @@
     }
 
     function applyLoaded(raw) {
+      if (!raw) return;
       try {
-        const d = JSON.parse(raw || '{}');
+        const d = (typeof raw === 'string') ? JSON.parse(raw) : raw;
         state.projects = d.projects || [];
         state.objectives = d.objectives || [];
         state.sessions = d.sessions || [];
@@ -1614,8 +1695,35 @@
         state.activeObjId = d.activeObjId || null;
         state.timerLeft = d.timerLeft || 0;
         state.timerTotal = d.timerTotal || 0;
-        state.timerRunning = false; // never auto-resume on web app open
+        state.isAlarmRinging = d.isAlarmRinging || false;
       } catch (e) { console.warn(e); }
+    }
+
+    let chimeInterval = null;
+    function checkAlarmRinging() {
+      const face = document.getElementById('clock-face');
+      if (state.isAlarmRinging) {
+        face.classList.add('ringing');
+        if (!chimeInterval) {
+          playChime('alert');
+          chimeInterval = setInterval(() => playChime('alert'), 3000);
+        }
+      } else {
+        face.classList.remove('ringing');
+        if (chimeInterval) {
+          clearInterval(chimeInterval);
+          chimeInterval = null;
+        }
+      }
+    }
+
+    async function stopAlarm() {
+      state.isAlarmRinging = false;
+      if (inExtension) {
+        chrome.runtime.sendMessage({ type: 'STOP_ALARM' });
+      }
+      save();
+      checkAlarmRinging();
     }
 
     function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
@@ -1825,6 +1933,7 @@
       updateClockDisplay();
       updateClockMeta();
       renderObjectives();
+      checkAlarmRinging();
     }
 
     function deleteObjective(id) {
@@ -1843,10 +1952,26 @@
 
     function startTimer() {
       state.timerRunning = true;
+      if (state.isAlarmRinging) stopAlarm();
+
+      if (inExtension) {
+        chrome.runtime.sendMessage({ type: 'START_TIMER', timerLeft: state.timerLeft });
+      }
+
       document.getElementById('btn-play').textContent = '⏸';
       document.getElementById('btn-play').classList.add('running');
+
+      clearInterval(state.timerInterval);
       state.timerInterval = setInterval(() => {
-        if (state.timerLeft <= 0) { timeUp(); return; }
+        if (state.timerLeft <= 0) {
+          if (!inExtension) timeUp();
+          else {
+            // In extension, background handles timeUp, 
+            // we just poll for the isAlarmRinging state change via load() or onChanged
+            clearInterval(state.timerInterval);
+          }
+          return;
+        }
         state.timerLeft--;
         updateClockDisplay();
       }, 1000);
@@ -1854,15 +1979,26 @@
 
     function pauseTimer() {
       state.timerRunning = false;
+      if (state.isAlarmRinging) stopAlarm();
+
+      if (inExtension) {
+        chrome.runtime.sendMessage({ type: 'STOP_TIMER' });
+      }
+
       clearInterval(state.timerInterval);
       document.getElementById('btn-play').textContent = '▶';
       document.getElementById('btn-play').classList.remove('running');
+      save();
     }
 
     function stopTimer() {
       pauseTimer();
       state.timerLeft = state.timerTotal;
+      if (inExtension) {
+        chrome.runtime.sendMessage({ type: 'RESET_TIMER' });
+      }
       updateClockDisplay();
+      save();
     }
 
     function resetTimer() {
