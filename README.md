@@ -7,16 +7,12 @@ Minimal freelance timer — track projects and objectives from any tab.
 ## 📁 File Structure
 
 ```
-focustrack-extension/
+focustrack/
 ├── manifest.json       # Chrome extension config
 ├── popup.html          # Minimal popup (timer only)
 ├── index.html          # Full web app
 ├── background.js       # Service worker
 ├── icons/              # Extension icons
-│   ├── icon16.png
-│   ├── icon32.png
-│   ├── icon48.png
-│   └── icon128.png
 └── README.md
 ```
 
@@ -24,16 +20,13 @@ focustrack-extension/
 
 ## 🚀 Step 1 — Deploy Web App to GitHub Pages
 
-1. Create a new GitHub repo called `focustrack`
-2. Upload all files in this folder to the repo root
-3. Go to **Settings → Pages → Source → main branch → / (root)**
-4. Your app will be live at: `https://YOUR-USERNAME.github.io/focustrack/`
+1. Go to your GitHub repo settings for `focustrack`.
+2. Go to **Settings → Pages**.
+3. Under **Build and deployment**, set **Source** to **Deploy from a branch**.
+4. Select the **main** branch and the **/(root)** folder, then click **Save**.
+5. Your app will be live at: `https://Collins-01.github.io/focustrack/`
 
-5. Open `popup.html` and replace this line:
-   ```js
-   const APP_URL = 'https://YOUR-USERNAME.github.io/focustrack/';
-   ```
-   with your actual GitHub Pages URL.
+*Note: The `popup.html` has already been updated with this URL.*
 
 ---
 
@@ -42,7 +35,7 @@ focustrack-extension/
 1. Open Chrome and go to `chrome://extensions`
 2. Enable **Developer mode** (top right toggle)
 3. Click **Load unpacked**
-4. Select this entire `focustrack-extension` folder
+4. Select the local `focustrack` folder (this repository folder)
 5. The FocusTrack icon appears in your toolbar — pin it for easy access
 
 ---
